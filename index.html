@@ -295,6 +295,19 @@
       var exact = [];
       for (var i = 0; i < pool.length; i++) {
         var r = pool[i];
+        if (!r.town) {
+          // 町域指定なし（「以下に掲載がない場合」）のデータは、市区町村名の
+          // 後に町名らしき文字列が続いていない場合に限り完全一致として扱う。
+          // そうしないと、より具体的な町域（例：飯山町上法軍寺 等）があるのに
+          // 市区町村名が一致するだけで汎用データが先に一致してしまう。
+          var cIdx = normCity.indexOf(r.city);
+          if (cIdx === -1) continue;
+          var remainder = normCity.slice(cIdx + r.city.length);
+          if (!remainder || /^[0-9\-]*$/.test(remainder)) {
+            exact.push(r);
+          }
+          continue;
+        }
         var cityTownKey = r.city + r.town;
         if (cityTownKey && normCity.indexOf(cityTownKey) !== -1) {
           exact.push(r);
@@ -325,6 +338,18 @@
           score = rec.city.length;
           if (rec.town && cityTown && normCity.indexOf(cityTown) !== -1) {
             score = cityTown.length + 1;
+          } else if (rec.town) {
+            // 町域名がさらに細かい表記で分かれている場合（例：「飯山町」→「飯山町上法軍寺」）
+            // 入力の続きと町域名の共通する前方部分が長いほど強く評価する
+            var afterCity = normCity.slice(normCity.indexOf(rec.city) + rec.city.length);
+            if (afterCity) {
+              var cpLen = 0;
+              var maxCp = Math.min(afterCity.length, rec.town.length);
+              while (cpLen < maxCp && afterCity.charAt(cpLen) === rec.town.charAt(cpLen)) cpLen++;
+              if (cpLen >= 2) {
+                score = rec.city.length + cpLen + 1;
+              }
+            }
           }
         } else if (rec.town && rec.town.length >= 2 && normCity.indexOf(rec.town) !== -1) {
           score = rec.town.length - 0.5; // 町域名のみ一致は弱めに評価
@@ -334,6 +359,19 @@
 
       if (scored.length > 0) {
         scored.sort(function (a, b) { return b.score - a.score; });
+
+        // 同点の候補が複数あり、その中に「（〇〇を除く）」という表記（個別ビル等を
+        // 除いた一般区画を表す日本郵便の慣例表記）が1件だけあれば、それを採用する。
+        // 例：「丸の内」だけ入力した場合、個別のビル名候補群より
+        // 「丸の内（次のビルを除く）」を優先する。
+        var topScore = scored[0].score;
+        var topGroup = scored.filter(function (s) { return s.score === topScore; });
+        if (topGroup.length > 1) {
+          var exclusionMatches = topGroup.filter(function (s) { return s.rec.town.indexOf("を除く）") !== -1; });
+          if (exclusionMatches.length === 1) {
+            return { tier: "exact", results: [exclusionMatches[0].rec] };
+          }
+        }
 
         var seen2 = {};
         var candidates = [];
